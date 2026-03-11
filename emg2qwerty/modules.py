@@ -278,3 +278,103 @@ class TDSConvEncoder(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
+
+
+class RNNBlock(nn.Module):
+    """An RNN block using LSTM/GRU with layer normalization and skip connections.
+    Maintains similar structure to TDSConv2dBlock with skip connections and
+    layer normalization for stable training.
+
+    Args:
+        num_features (int): Input/output feature dimension
+        hidden_size (int): Hidden size of the RNN
+        num_layers (int): Number of RNN layers (default: 1)
+        rnn_type (str): Type of RNN - 'lstm' or 'gru' (default: 'lstm')
+        bidirectional (bool): Whether to use bidirectional RNN (default: True)
+    """
+
+    def __init__(
+        self,
+        num_features: int,
+        hidden_size: int,
+        num_layers: int = 1,
+        rnn_type: str = "lstm",
+        bidirectional: bool = True,
+    ) -> None:
+        super().__init__()
+        self.num_features = num_features
+        self.hidden_size = hidden_size
+        self.bidirectional = bidirectional
+
+        # Create RNN
+        rnn_class = nn.LSTM if rnn_type.upper() == "LSTM" else nn.GRU
+        self.rnn = rnn_class(
+            input_size=num_features,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            bidirectional=bidirectional,
+            batch_first=False,  # We use (T, N, C) format
+        )
+
+        # Project RNN output back to num_features for skip connection
+        rnn_output_size = hidden_size * (2 if bidirectional else 1)
+        self.output_proj = nn.Linear(rnn_output_size, num_features)
+        self.layer_norm = nn.LayerNorm(num_features)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        # inputs: (T, N, num_features)
+        x = inputs
+
+        # RNN forward
+        rnn_out, _ = self.rnn(x)  # (T, N, hidden_size * num_directions)
+
+        # Project back to num_features
+        x = self.output_proj(rnn_out)  # (T, N, num_features)
+
+        # Skip connection
+        x = x + inputs
+
+        # Layer norm
+        return self.layer_norm(x)  # (T, N, num_features)
+
+
+class RNNEncoder(nn.Module):
+    """An RNN-based encoder composing a sequence of stacked RNN blocks.
+    Similar in structure to TDSConvEncoder but uses RNN layers instead of
+    temporal convolutions. Each block consists of a bidirectional RNN with
+    skip connections and layer normalization.
+
+    Args:
+        num_features (int): Input/output feature dimension for all blocks
+        num_blocks (int): Number of RNN blocks to stack (default: 4)
+        hidden_size (int): Hidden size for each RNN block (default: 256)
+        rnn_type (str): Type of RNN - 'lstm' or 'gru' (default: 'lstm')
+        bidirectional (bool): Whether to use bidirectional RNN (default: True)
+    """
+
+    def __init__(
+        self,
+        num_features: int,
+        num_blocks: int = 4,
+        hidden_size: int = 256,
+        rnn_type: str = "lstm",
+        bidirectional: bool = True,
+    ) -> None:
+        super().__init__()
+
+        rnn_blocks: list[nn.Module] = []
+        for _ in range(num_blocks):
+            rnn_blocks.append(
+                RNNBlock(
+                    num_features=num_features,
+                    hidden_size=hidden_size,
+                    num_layers=1,
+                    rnn_type=rnn_type,
+                    bidirectional=bidirectional,
+                )
+            )
+
+        self.rnn_blocks = nn.Sequential(*rnn_blocks)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.rnn_blocks(inputs)  # (T, N, num_features)
