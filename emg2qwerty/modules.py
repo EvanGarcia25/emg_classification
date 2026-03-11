@@ -489,19 +489,27 @@ class SinusoidalPositionalEncoding(nn.Module):
     ) -> None:
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
+        self.d_model = d_model
 
-        pe = torch.zeros(max_len, 1, d_model)
-        position = torch.arange(max_len).unsqueeze(1).float()
+        self.register_buffer("pe", self._build_pe(max_len, d_model))
+
+    @staticmethod
+    def _build_pe(length: int, d_model: int) -> torch.Tensor:
+        pe = torch.zeros(length, 1, d_model)
+        position = torch.arange(length).unsqueeze(1).float()
         div_term = torch.exp(
             torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
         )
         pe[:, 0, 0::2] = torch.sin(position * div_term)
         pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer("pe", pe)
+        return pe
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         # inputs: (T, N, d_model)
-        return self.dropout(inputs + self.pe[: inputs.shape[0]])
+        T = inputs.shape[0]
+        if T > self.pe.shape[0]:
+            self.pe = self._build_pe(T, self.d_model).to(self.pe.device)
+        return self.dropout(inputs + self.pe[:T])
 
 
 class EMGPatchEmbedding(nn.Module):
