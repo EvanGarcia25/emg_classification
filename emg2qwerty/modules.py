@@ -378,3 +378,116 @@ class RNNEncoder(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.rnn_blocks(inputs)  # (T, N, num_features)
+
+
+class ConvBlock(nn.Module):
+    """A 1D temporal convolution block with batch norm, ReLU, dropout,
+    and a residual connection.
+
+    Args:
+        in_channels: Number of input channels.
+        out_channels: Number of output channels.
+        kernel_size: Temporal convolution kernel size.
+        dropout: Dropout probability.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+        self.conv = nn.Conv1d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            padding=kernel_size // 2,
+        )
+        self.batch_norm = nn.BatchNorm1d(out_channels)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+        self.residual = (
+            nn.Conv1d(in_channels, out_channels, 1)
+            if in_channels != out_channels
+            else nn.Identity()
+        )
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        # inputs: (N, C, T)
+        x = self.conv(inputs)
+        x = self.batch_norm(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+        return x + self.residual(inputs)
+
+
+class CNNRNNEncoder(nn.Module):
+    """A CNN + RNN encoder: stacked 1D conv blocks followed by a bidirectional
+    LSTM/GRU, with a linear projection back to ``num_features``.
+
+    Input shape:  (T, N, num_features)
+    Output shape: (T, N, num_features)
+
+    Args:
+        num_features: Number of input (and output) features.
+        cnn_channels: Output channels for each conv block.
+        cnn_kernel_size: Temporal kernel size for all conv blocks.
+        cnn_dropout: Dropout in conv blocks.
+        rnn_type: ``"lstm"`` or ``"gru"``.
+        rnn_hidden_size: Hidden size of the RNN.
+        rnn_num_layers: Number of stacked RNN layers.
+        rnn_dropout: Dropout between RNN layers (ignored when num_layers==1).
+        rnn_bidirectional: Whether to use a bidirectional RNN.
+    """
+
+    def __init__(
+        self,
+        num_features: int,
+        cnn_channels: Sequence[int] = (64, 128, 128),
+        cnn_kernel_size: int = 5,
+        cnn_dropout: float = 0.1,
+        rnn_type: str = "lstm",
+        rnn_hidden_size: int = 256,
+        rnn_num_layers: int = 2,
+        rnn_dropout: float = 0.1,
+        rnn_bidirectional: bool = True,
+    ) -> None:
+        super().__init__()
+
+        # CNN layers
+        conv_blocks: list[nn.Module] = []
+        in_channels = num_features
+        for out_channels in cnn_channels:
+            conv_blocks.append(
+                ConvBlock(in_channels, out_channels, cnn_kernel_size, cnn_dropout)
+            )
+            in_channels = out_channels
+        self.cnn = nn.Sequential(*conv_blocks)
+
+        # RNN
+        rnn_cls = {"lstm": nn.LSTM, "gru": nn.GRU}[rnn_type.lower()]
+        self.rnn = rnn_cls(
+            input_size=in_channels,
+            hidden_size=rnn_hidden_size,
+            num_layers=rnn_num_layers,
+            dropout=rnn_dropout if rnn_num_layers > 1 else 0.0,
+            bidirectional=rnn_bidirectional,
+            batch_first=False,
+        )
+
+        rnn_output_size = rnn_hidden_size * (2 if rnn_bidirectional else 1)
+        self.output_proj = nn.Linear(rnn_output_size, num_features)
+        self.layer_norm = nn.LayerNorm(num_features)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        # CNN expects (N, C, T)
+        x = inputs.permute(1, 2, 0)
+        x = self.cnn(x)
+        x = x.permute(2, 0, 1)  # back to (T, N, C)
+
+        x, _ = self.rnn(x)
+        x = self.output_proj(x)
+        x = self.layer_norm(x)
+        return x  # (T, N, num_features)

@@ -1,0 +1,27 @@
+_target_: emg2qwerty.lightning.CNNRNNCTCModule
+
+in_features: 528
+mlp_features: [384]
+
+cnn_channels: [64, 128, 128]
+cnn_kernel_size: 5
+cnn_dropout: 0.2
+
+rnn_type: lstm
+rnn_hidden_size: 256
+rnn_num_layers: 2
+rnn_dropout: 0.2
+rnn_bidirectional: true
+
+batch_size: 64
+
+optimizer:
+  _target_: torch.optim.Adam
+  lr: 3e-4
+
+lr_scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: 50
+
+trainer:
+  gradient_clip_val: 5.0
