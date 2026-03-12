@@ -555,6 +555,10 @@ class TransformerCTCModule(pl.LightningModule):
 
     NUM_BANDS: ClassVar[int] = 2
     ELECTRODE_CHANNELS: ClassVar[int] = 16
+    # maximum chunk size for test-time inference. Full sessions can be
+    # 140k+ timesteps, causing O(t^2) attention collapse. Chunking keeps
+    # each window within the trained context length.
+    TEST_CHUNK_SIZE: ClassVar[int] = 8000
 
     def __init__(
         self,
@@ -661,14 +665,59 @@ class TransformerCTCModule(pl.LightningModule):
         self.log_dict(metrics.compute(), sync_dist=True)
         metrics.reset()
 
+    def _chunked_forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Run forward in chunks of TEST_CHUNK_SIZE to avoid O(T^2) attention
+        collapse on full test sessions that are 10-20x the training window."""
+        T = inputs.shape[0]
+        if T <= self.TEST_CHUNK_SIZE:
+            return self.forward(inputs)
+        chunks = [
+            self.forward(inputs[start : start + self.TEST_CHUNK_SIZE])
+            for start in range(0, T, self.TEST_CHUNK_SIZE)
+        ]
+        return torch.cat(chunks, dim=0)
+
     def training_step(self, *args, **kwargs) -> torch.Tensor:
         return self._step("train", *args, **kwargs)
 
     def validation_step(self, *args, **kwargs) -> torch.Tensor:
         return self._step("val", *args, **kwargs)
 
-    def test_step(self, *args, **kwargs) -> torch.Tensor:
-        return self._step("test", *args, **kwargs)
+    def test_step(
+        self, batch: dict[str, torch.Tensor], *args, **kwargs
+    ) -> torch.Tensor:
+        inputs = batch["inputs"]
+        targets = batch["targets"]
+        input_lengths = batch["input_lengths"]
+        target_lengths = batch["target_lengths"]
+        N = len(input_lengths)
+
+        emissions = self._chunked_forward(inputs)
+
+        T_diff = inputs.shape[0] - emissions.shape[0]
+        emission_lengths = input_lengths - T_diff
+
+        loss = self.ctc_loss(
+            log_probs=emissions,
+            targets=targets.transpose(0, 1),
+            input_lengths=emission_lengths,
+            target_lengths=target_lengths,
+        )
+
+        predictions = self.decoder.decode_batch(
+            emissions=emissions.detach().cpu().numpy(),
+            emission_lengths=emission_lengths.detach().cpu().numpy(),
+        )
+
+        metrics = self.metrics["test_metrics"]
+        targets_np = targets.detach().cpu().numpy()
+        target_lengths_np = target_lengths.detach().cpu().numpy()
+        for i in range(N):
+            target = LabelData.from_labels(targets_np[: target_lengths_np[i], i])
+            metrics.update(prediction=predictions[i], target=target)
+
+        self.log("test/loss", loss, batch_size=N, sync_dist=True)
+        return loss
 
     def on_train_epoch_end(self) -> None:
         self._epoch_end("train")
@@ -698,6 +747,7 @@ class ViTransformerCTCModule(pl.LightningModule):
 
     NUM_BANDS: ClassVar[int] = 2
     ELECTRODE_CHANNELS: ClassVar[int] = 16
+    TEST_CHUNK_SIZE: ClassVar[int] = 8000
 
     def __init__(
         self,
@@ -823,14 +873,59 @@ class ViTransformerCTCModule(pl.LightningModule):
         self.log_dict(metrics.compute(), sync_dist=True)
         metrics.reset()
 
+    def _chunked_forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Run forward in chunks of TEST_CHUNK_SIZE to avoid O(T^2) attention
+        collapse on full test sessions that are 10-20x the training window."""
+        T = inputs.shape[0]
+        if T <= self.TEST_CHUNK_SIZE:
+            return self.forward(inputs)
+        chunks = [
+            self.forward(inputs[start : start + self.TEST_CHUNK_SIZE])
+            for start in range(0, T, self.TEST_CHUNK_SIZE)
+        ]
+        return torch.cat(chunks, dim=0)
+
     def training_step(self, *args, **kwargs) -> torch.Tensor:
         return self._step("train", *args, **kwargs)
 
     def validation_step(self, *args, **kwargs) -> torch.Tensor:
         return self._step("val", *args, **kwargs)
 
-    def test_step(self, *args, **kwargs) -> torch.Tensor:
-        return self._step("test", *args, **kwargs)
+    def test_step(
+        self, batch: dict[str, torch.Tensor], *args, **kwargs
+    ) -> torch.Tensor:
+        inputs = batch["inputs"]
+        targets = batch["targets"]
+        input_lengths = batch["input_lengths"]
+        target_lengths = batch["target_lengths"]
+        N = len(input_lengths)
+
+        emissions = self._chunked_forward(inputs)
+
+        T_diff = inputs.shape[0] - emissions.shape[0]
+        emission_lengths = input_lengths - T_diff
+
+        loss = self.ctc_loss(
+            log_probs=emissions,
+            targets=targets.transpose(0, 1),
+            input_lengths=emission_lengths,
+            target_lengths=target_lengths,
+        )
+
+        predictions = self.decoder.decode_batch(
+            emissions=emissions.detach().cpu().numpy(),
+            emission_lengths=emission_lengths.detach().cpu().numpy(),
+        )
+
+        metrics = self.metrics["test_metrics"]
+        targets_np = targets.detach().cpu().numpy()
+        target_lengths_np = target_lengths.detach().cpu().numpy()
+        for i in range(N):
+            target = LabelData.from_labels(targets_np[: target_lengths_np[i], i])
+            metrics.update(prediction=predictions[i], target=target)
+
+        self.log("test/loss", loss, batch_size=N, sync_dist=True)
+        return loss
 
     def on_train_epoch_end(self) -> None:
         self._epoch_end("train")
