@@ -13,6 +13,10 @@ temporal_jitter:
   _target_: emg2qwerty.transforms.TemporalAlignmentJitter
   max_offset: 120  # Max 60ms jitter for 2kHz EMG
 
+subsample:
+  _target_: emg2qwerty.transforms.Subsample
+  factor: 1  # 1=2kHz (no-op), 2=1kHz, 4=500Hz, 8=250Hz
+
 logspec:
   _target_: emg2qwerty.transforms.LogSpectrogram
   n_fft: 64
@@ -30,11 +34,13 @@ transforms:
     - ${to_tensor}
     - ${band_rotation}
     - ${temporal_jitter}
+    - ${subsample}
     - ${logspec}
     - ${specaug}
 
   val:
     - ${to_tensor}
+    - ${subsample}
     - ${logspec}
 
   test: ${transforms.val}

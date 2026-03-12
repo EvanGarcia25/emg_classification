@@ -473,7 +473,7 @@ class CNNRNNEncoder(nn.Module):
 ### Evan's transformer / ViT implementation
 
 class SinusoidalPositionalEncoding(nn.Module):
-    """Sinusoidal positional encoding as in 'Attention Is All You Need'.
+    """Attention implementation
 
     Adds position-dependent sinusoidal signals to encode temporal ordering
     for inputs of shape (T, N, d_model).
@@ -549,7 +549,7 @@ class EMGPatchEmbedding(nn.Module):
         self.num_bands = num_bands
         self.d_model = d_model
 
-        # Pad to ensure even patch tiling
+        # pad to ensure even patch tiling
         self.pad_h = (
             (self.patch_size[0] - electrode_channels % self.patch_size[0])
             % self.patch_size[0]
@@ -566,7 +566,7 @@ class EMGPatchEmbedding(nn.Module):
         )
         self.total_patches = self.num_patches_per_band * num_bands
 
-        # Per-band Conv2d patch projection
+        # per-band Conv2d patch projection
         self.patch_projs = nn.ModuleList(
             [
                 nn.Conv2d(
@@ -579,11 +579,11 @@ class EMGPatchEmbedding(nn.Module):
             ]
         )
 
-        # Learned spatial positional embedding
+        # learned spatial positional embedding
         self.patch_pos_embed = nn.Parameter(
             torch.randn(1, self.total_patches, d_model) * 0.02
         )
-        # Band embedding to distinguish left vs right
+        # band embedding to distinguish left vs right
         self.band_embed = nn.Parameter(
             torch.randn(1, num_bands, 1, d_model) * 0.02
         )
@@ -596,11 +596,11 @@ class EMGPatchEmbedding(nn.Module):
 
         patches_per_band = []
         for b in range(self.num_bands):
-            x = inputs[:, :, b].reshape(T * N, 1, C, freq)  # (T*N, 1, C, freq)
+            x = inputs[:, :, b].reshape(T * N, 1, C, freq) # (T*N, 1, C, freq)
             if self.pad_h > 0 or self.pad_w > 0:
                 x = nn.functional.pad(x, (0, self.pad_w, 0, self.pad_h))
-            x = self.patch_projs[b](x)  # (T*N, d_model, H', W')
-            x = x.flatten(2).transpose(1, 2)  # (T*N, patches_per_band, d_model)
+            x = self.patch_projs[b](x) # (T*N, d_model, H', W')
+            x = x.flatten(2).transpose(1, 2) # (T*N, patches_per_band, d_model)
             x = x + self.band_embed[0, b]
             patches_per_band.append(x)
 
@@ -663,21 +663,21 @@ class SpatialTransformerEncoder(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         T, N, P, D = inputs.shape
-        x = inputs.reshape(T * N, P, D)  # (T*N, patches, d_model)
+        x = inputs.reshape(T * N, P, D) # (T*N, patches, d_model)
 
         if self.use_cls_token:
             cls = self.cls_token.expand(T * N, -1, -1)
-            x = torch.cat([cls, x], dim=1)  # (T*N, 1+P, D)
+            x = torch.cat([cls, x], dim=1) # (T*N, 1+P, D)
 
         x = self.transformer(x)
 
         if self.use_cls_token:
-            x = x[:, 0]  # CLS output: (T*N, D)
+            x = x[:, 0] # CLS output: (T*N, D)
         else:
-            x = x.mean(dim=1)  # Mean pool: (T*N, D)
+            x = x.mean(dim=1) # Mean pool: (T*N, D)
 
         x = self.norm(x)
-        return x.reshape(T, N, D)  # (T, N, d_model)
+        return x.reshape(T, N, D) # (T, N, d_model)
 
 
 class TemporalTransformerEncoder(nn.Module):
@@ -720,7 +720,7 @@ class TemporalTransformerEncoder(nn.Module):
             dim_feedforward=dim_feedforward,
             dropout=dropout,
             activation="gelu",
-            batch_first=False,  # (T, N, D) format
+            batch_first=False, # (T, N, D) format
             norm_first=True,
         )
         self.transformer = nn.TransformerEncoder(
@@ -729,6 +729,6 @@ class TemporalTransformerEncoder(nn.Module):
         self.norm = nn.LayerNorm(num_features)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        x = self.pos_encoding(inputs)  # (T, N, num_features)
+        x = self.pos_encoding(inputs) # (T, N, num_features)
         x = self.transformer(x)
-        return self.norm(x)  # (T, N, num_features)
+        return self.norm(x) # (T, N, num_features)

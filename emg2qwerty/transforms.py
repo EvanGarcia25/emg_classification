@@ -190,6 +190,25 @@ class LogSpectrogram:
 
 
 @dataclass
+class Subsample:
+    """Implements a lower EMG sampling rate by retaining every ``factor``-th
+    sample along the time axis. Built to investigate the effect of sampling rate 
+    on decoding performance. The raw EMG is recorded at 2kHz; setting factor=2 
+    simulates 1kHz, factor=4 simulates 500Hz, etc.
+
+    Args:
+        factor (int): Decimation factor. factor=1 is a no-op. (default: 1)
+    """
+
+    factor: int = 1
+
+    def __call__(self, tensor: torch.Tensor) -> torch.Tensor:
+        if self.factor == 1:
+            return tensor
+        return tensor[:: self.factor]
+
+
+@dataclass
 class SpecAugment:
     """Applies time and frequency masking as per the paper
     "SpecAugment: A Simple Data Augmentation Method for Automatic Speech

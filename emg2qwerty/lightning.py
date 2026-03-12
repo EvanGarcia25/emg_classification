@@ -573,7 +573,7 @@ class TransformerCTCModule(pl.LightningModule):
 
         num_features = self.NUM_BANDS * mlp_features[-1]
 
-        # Model components
+        # model components
         # inputs: (T, N, bands=2, electrode_channels=16, freq)
         self.spec_norm = SpectrogramNorm(
             channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS,
@@ -596,7 +596,6 @@ class TransformerCTCModule(pl.LightningModule):
             nn.LogSoftmax(dim=-1),
         )
 
-        # Criterion
         self.ctc_loss = nn.CTCLoss(blank=charset().null_class)
 
         # Decoder
@@ -629,24 +628,24 @@ class TransformerCTCModule(pl.LightningModule):
 
         emissions = self.forward(inputs)
 
-        # Transformer preserves temporal dimension (no downsampling)
+        # transformer preserves temporal dimension (no downsampling)
         T_diff = inputs.shape[0] - emissions.shape[0]
         emission_lengths = input_lengths - T_diff
 
         loss = self.ctc_loss(
-            log_probs=emissions,  # (T, N, num_classes)
-            targets=targets.transpose(0, 1),  # (T, N) -> (N, T)
-            input_lengths=emission_lengths,  # (N,)
-            target_lengths=target_lengths,  # (N,)
+            log_probs=emissions, # (T, N, num_classes)
+            targets=targets.transpose(0, 1), # (T, N) -> (N, T)
+            input_lengths=emission_lengths, # (N,)
+            target_lengths=target_lengths, # (N,)
         )
 
-        # Decode emissions
+        # decode emissions
         predictions = self.decoder.decode_batch(
             emissions=emissions.detach().cpu().numpy(),
             emission_lengths=emission_lengths.detach().cpu().numpy(),
         )
 
-        # Update metrics
+        # update metrics
         metrics = self.metrics[f"{phase}_metrics"]
         targets = targets.detach().cpu().numpy()
         target_lengths = target_lengths.detach().cpu().numpy()
@@ -721,7 +720,7 @@ class ViTransformerCTCModule(pl.LightningModule):
 
         freq_bins = in_features // self.ELECTRODE_CHANNELS
 
-        # Model components
+        # model components
         # inputs: (T, N, bands=2, electrode_channels=16, freq)
         self.spec_norm = SpectrogramNorm(
             channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS,
@@ -754,13 +753,12 @@ class ViTransformerCTCModule(pl.LightningModule):
             nn.LogSoftmax(dim=-1),
         )
 
-        # Criterion
         self.ctc_loss = nn.CTCLoss(blank=charset().null_class)
 
-        # Decoder
+        # decoder
         self.decoder = instantiate(decoder)
 
-        # Metrics
+        # metrics
         metrics = MetricCollection([CharacterErrorRates()])
         self.metrics = nn.ModuleDict(
             {
@@ -797,19 +795,19 @@ class ViTransformerCTCModule(pl.LightningModule):
         emission_lengths = input_lengths - T_diff
 
         loss = self.ctc_loss(
-            log_probs=emissions,  # (T, N, num_classes)
-            targets=targets.transpose(0, 1),  # (T, N) -> (N, T)
-            input_lengths=emission_lengths,  # (N,)
-            target_lengths=target_lengths,  # (N,)
+            log_probs=emissions, # (T, N, num_classes)
+            targets=targets.transpose(0, 1), # (T, N) -> (N, T)
+            input_lengths=emission_lengths, # (N,)
+            target_lengths=target_lengths, # (N,)
         )
 
-        # Decode emissions
+        # decode emissions
         predictions = self.decoder.decode_batch(
             emissions=emissions.detach().cpu().numpy(),
             emission_lengths=emission_lengths.detach().cpu().numpy(),
         )
 
-        # Update metrics
+        # update metrics
         metrics = self.metrics[f"{phase}_metrics"]
         targets = targets.detach().cpu().numpy()
         target_lengths = target_lengths.detach().cpu().numpy()
