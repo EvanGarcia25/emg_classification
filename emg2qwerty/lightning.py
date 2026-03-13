@@ -595,7 +595,7 @@ class TransformerCTCModule(pl.LightningModule):
 
     NUM_BANDS: ClassVar[int] = 2
 
-    TEST_CHUNK_SIZE: ClassVar[int] = 8000  # ≈ 8000 raw EMG 
+    TEST_CHUNK_SIZE: ClassVar[int] = 500  # ≈ 8000 / 16 raw EMG 
 
     def __init__(
         self,
@@ -715,7 +715,7 @@ class TransformerCTCModule(pl.LightningModule):
         if T <= self.TEST_CHUNK_SIZE:
             return self.forward(inputs)
         
-        pre_pad, post_pad = 1800, 200 # updated
+        pre_pad, post_pad = 112, 12 # updated to reflect frames
         
         outputs = []
         for start in range(0, T, self.TEST_CHUNK_SIZE):
