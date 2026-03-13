@@ -23,10 +23,8 @@ from emg2qwerty.data import LabelData, WindowedEMGDataset
 from emg2qwerty.metrics import CharacterErrorRates
 from emg2qwerty.modules import (
     CNNRNNEncoder,
-    EMGPatchEmbedding,
     MultiBandRotationInvariantMLP,
     RNNEncoder,
-    SpatialTransformerEncoder,
     SpectrogramNorm,
     TDSConvEncoder,
     TemporalTransformerEncoder,
@@ -666,16 +664,37 @@ class TransformerCTCModule(pl.LightningModule):
         metrics.reset()
 
     def _chunked_forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        """Run forward in chunks of TEST_CHUNK_SIZE to avoid O(T^2) attention
-        collapse on full test sessions that are 10-20x the training window."""
+        """Run forward in overlapping chunks with padding context to avoid O(T^2)
+        attention collapse and preserve local context from training."""
         T = inputs.shape[0]
         if T <= self.TEST_CHUNK_SIZE:
             return self.forward(inputs)
-        chunks = [
-            self.forward(inputs[start : start + self.TEST_CHUNK_SIZE])
-            for start in range(0, T, self.TEST_CHUNK_SIZE)
-        ]
-        return torch.cat(chunks, dim=0)
+        
+        # Use same padding as training for context around each chunk
+        pre_pad, post_pad = 1800, 200
+        pad_size = pre_pad + post_pad
+        
+        outputs = []
+        for start in range(0, T, self.TEST_CHUNK_SIZE):
+            # Extract chunk with padding context
+            pad_start = max(0, start - pre_pad)
+            pad_end = min(T, start + self.TEST_CHUNK_SIZE + post_pad)
+            chunk_padded = inputs[pad_start:pad_end]
+            
+            # Run forward
+            chunk_output = self.forward(chunk_padded)
+            
+            # Extract only the middle part (without padding regions) from output
+            output_start = start - pad_start  # frames from pre-padding
+            output_end = output_start + self.TEST_CHUNK_SIZE
+            
+            # Clamp to valid output range
+            output_start = max(0, output_start)
+            output_end = min(chunk_output.shape[0], output_end)
+            
+            outputs.append(chunk_output[output_start:output_end])
+        
+        return torch.cat(outputs, dim=0)
 
     def training_step(self, *args, **kwargs) -> torch.Tensor:
         return self._step("train", *args, **kwargs)
@@ -736,216 +755,5 @@ class TransformerCTCModule(pl.LightningModule):
         )
 
 
-class ViTransformerCTCModule(pl.LightningModule):
-    """Vision Transformer CTC module for EMG decoding.
 
-    Replaces the MultiBandRotationInvariantMLP front-end with a ViT-style
-    patch embedding that treats each timestep's (electrode_channels, freq_bins)
-    per band as a 2D image. Self-attention is applied both spatially (across
-    electrode-frequency patches within each timestep) and temporally
-    (across timesteps)."""
-
-    NUM_BANDS: ClassVar[int] = 2
-    TEST_CHUNK_SIZE: ClassVar[int] = 8000
-
-    def __init__(
-        self,
-        in_features: int,
-        d_model: int,
-        patch_size: Sequence[int],
-        spatial_nhead: int,
-        spatial_layers: int,
-        temporal_nhead: int,
-        temporal_layers: int,
-        dim_feedforward: int,
-        dropout: float,
-        use_cls_token: bool,
-        optimizer: DictConfig,
-        lr_scheduler: DictConfig,
-        decoder: DictConfig,
-        electrode_channels: int = 16,
-    ) -> None:
-        super().__init__()
-        self.save_hyperparameters()
-
-        if in_features % electrode_channels != 0:
-            raise ValueError(
-                "in_features must be divisible by electrode_channels "
-                f"(got in_features={in_features}, "
-                f"electrode_channels={electrode_channels})"
-            )
-        freq_bins = in_features // electrode_channels
-
-        # model components
-        # inputs: (T, N, bands=2, C=electrode_channels, freq)
-        self.spec_norm = SpectrogramNorm(
-            channels=self.NUM_BANDS * electrode_channels,
-        )
-        self.patch_embed = EMGPatchEmbedding(
-            electrode_channels=electrode_channels,
-            freq_bins=freq_bins,
-            patch_size=patch_size,
-            d_model=d_model,
-            num_bands=self.NUM_BANDS,
-            dropout=dropout,
-        )
-        self.spatial_encoder = SpatialTransformerEncoder(
-            d_model=d_model,
-            nhead=spatial_nhead,
-            num_layers=spatial_layers,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            use_cls_token=use_cls_token,
-        )
-        self.temporal_encoder = TemporalTransformerEncoder(
-            num_features=d_model,
-            nhead=temporal_nhead,
-            num_layers=temporal_layers,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-        )
-        self.output_proj = nn.Sequential(
-            nn.Linear(d_model, charset().num_classes),
-            nn.LogSoftmax(dim=-1),
-        )
-
-        self.ctc_loss = nn.CTCLoss(blank=charset().null_class)
-
-        # decoder
-        self.decoder = instantiate(decoder)
-
-        # metrics
-        metrics = MetricCollection([CharacterErrorRates()])
-        self.metrics = nn.ModuleDict(
-            {
-                f"{phase}_metrics": metrics.clone(prefix=f"{phase}/")
-                for phase in ["train", "val", "test"]
-            }
-        )
-
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        # (T, N, bands=2, C, freq)
-        x = self.spec_norm(inputs)
-        # (T, N, total_patches, d_model)
-        x = self.patch_embed(x)
-        # (T, N, d_model)
-        x = self.spatial_encoder(x)
-        # (T, N, d_model)
-        x = self.temporal_encoder(x)
-        # (T, N, num_classes)
-        return self.output_proj(x)
-
-    def _step(
-        self, phase: str, batch: dict[str, torch.Tensor], *args, **kwargs
-    ) -> torch.Tensor:
-        inputs = batch["inputs"]
-        targets = batch["targets"]
-        input_lengths = batch["input_lengths"]
-        target_lengths = batch["target_lengths"]
-        N = len(input_lengths)  # batch_size
-
-        emissions = self.forward(inputs)
-
-        # ViT preserves temporal dimension (no downsampling)
-        T_diff = inputs.shape[0] - emissions.shape[0]
-        emission_lengths = input_lengths - T_diff
-
-        loss = self.ctc_loss(
-            log_probs=emissions, # (T, N, num_classes)
-            targets=targets.transpose(0, 1), # (T, N) -> (N, T)
-            input_lengths=emission_lengths, # (N,)
-            target_lengths=target_lengths, # (N,)
-        )
-
-        # decode emissions
-        predictions = self.decoder.decode_batch(
-            emissions=emissions.detach().cpu().numpy(),
-            emission_lengths=emission_lengths.detach().cpu().numpy(),
-        )
-
-        # update metrics
-        metrics = self.metrics[f"{phase}_metrics"]
-        targets = targets.detach().cpu().numpy()
-        target_lengths = target_lengths.detach().cpu().numpy()
-        for i in range(N):
-            target = LabelData.from_labels(targets[: target_lengths[i], i])
-            metrics.update(prediction=predictions[i], target=target)
-
-        self.log(f"{phase}/loss", loss, batch_size=N, sync_dist=True)
-        return loss
-
-    def _epoch_end(self, phase: str) -> None:
-        metrics = self.metrics[f"{phase}_metrics"]
-        self.log_dict(metrics.compute(), sync_dist=True)
-        metrics.reset()
-
-    def _chunked_forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        """Run forward in chunks of TEST_CHUNK_SIZE to avoid O(T^2) attention
-        collapse on full test sessions that are 10-20x the training window."""
-        T = inputs.shape[0]
-        if T <= self.TEST_CHUNK_SIZE:
-            return self.forward(inputs)
-        chunks = [
-            self.forward(inputs[start : start + self.TEST_CHUNK_SIZE])
-            for start in range(0, T, self.TEST_CHUNK_SIZE)
-        ]
-        return torch.cat(chunks, dim=0)
-
-    def training_step(self, *args, **kwargs) -> torch.Tensor:
-        return self._step("train", *args, **kwargs)
-
-    def validation_step(self, *args, **kwargs) -> torch.Tensor:
-        return self._step("val", *args, **kwargs)
-
-    def test_step(
-        self, batch: dict[str, torch.Tensor], *args, **kwargs
-    ) -> torch.Tensor:
-        inputs = batch["inputs"]
-        targets = batch["targets"]
-        input_lengths = batch["input_lengths"]
-        target_lengths = batch["target_lengths"]
-        N = len(input_lengths)
-
-        emissions = self._chunked_forward(inputs)
-
-        T_diff = inputs.shape[0] - emissions.shape[0]
-        emission_lengths = input_lengths - T_diff
-
-        loss = self.ctc_loss(
-            log_probs=emissions,
-            targets=targets.transpose(0, 1),
-            input_lengths=emission_lengths,
-            target_lengths=target_lengths,
-        )
-
-        predictions = self.decoder.decode_batch(
-            emissions=emissions.detach().cpu().numpy(),
-            emission_lengths=emission_lengths.detach().cpu().numpy(),
-        )
-
-        metrics = self.metrics["test_metrics"]
-        targets_np = targets.detach().cpu().numpy()
-        target_lengths_np = target_lengths.detach().cpu().numpy()
-        for i in range(N):
-            target = LabelData.from_labels(targets_np[: target_lengths_np[i], i])
-            metrics.update(prediction=predictions[i], target=target)
-
-        self.log("test/loss", loss, batch_size=N, sync_dist=True)
-        return loss
-
-    def on_train_epoch_end(self) -> None:
-        self._epoch_end("train")
-
-    def on_validation_epoch_end(self) -> None:
-        self._epoch_end("val")
-
-    def on_test_epoch_end(self) -> None:
-        self._epoch_end("test")
-
-    def configure_optimizers(self) -> dict[str, Any]:
-        return utils.instantiate_optimizer_and_scheduler(
-            self.parameters(),
-            optimizer_config=self.hparams.optimizer,
-            lr_scheduler_config=self.hparams.lr_scheduler,
-        )
 
