@@ -300,7 +300,6 @@ class RNNCTCModule(pl.LightningModule):
         mlp_features: Sequence[int],
         num_blocks: int,
         hidden_size: int,
-        rnn_type: str,
         optimizer: DictConfig,
         lr_scheduler: DictConfig,
         decoder: DictConfig,
@@ -329,7 +328,6 @@ class RNNCTCModule(pl.LightningModule):
                 num_features=num_features,
                 num_blocks=num_blocks,
                 hidden_size=hidden_size,
-                rnn_type=rnn_type,
                 bidirectional=True,
             ),
             # (T, N, num_classes)
@@ -437,6 +435,7 @@ class RNNCTCModule(pl.LightningModule):
             optimizer_config=self.hparams.optimizer,
             lr_scheduler_config=self.hparams.lr_scheduler,
         )
+
 
 
 class CNNRNNCTCModule(pl.LightningModule):

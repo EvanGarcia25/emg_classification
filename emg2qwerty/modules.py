@@ -328,15 +328,13 @@ class TDSConvEncoder(nn.Module):
 
 
 class RNNBlock(nn.Module):
-    """An RNN block using LSTM/GRU with layer normalization and skip connections.
-    Maintains similar structure to TDSConv2dBlock with skip connections and
-    layer normalization for stable training.
+    """A vanilla RNN block with layer normalization and skip connections.
+    Maintains similar structure to TDSConv2dBlock
 
     Args:
         num_features (int): Input/output feature dimension
         hidden_size (int): Hidden size of the RNN
         num_layers (int): Number of RNN layers (default: 1)
-        rnn_type (str): Type of RNN - 'lstm' or 'gru' (default: 'lstm')
         bidirectional (bool): Whether to use bidirectional RNN (default: True)
     """
 
@@ -345,7 +343,6 @@ class RNNBlock(nn.Module):
         num_features: int,
         hidden_size: int,
         num_layers: int = 1,
-        rnn_type: str = "lstm",
         bidirectional: bool = True,
     ) -> None:
         super().__init__()
@@ -353,9 +350,8 @@ class RNNBlock(nn.Module):
         self.hidden_size = hidden_size
         self.bidirectional = bidirectional
 
-        # Create RNN
-        rnn_class = nn.LSTM if rnn_type.upper() == "LSTM" else nn.GRU
-        self.rnn = rnn_class(
+        # Create vanilla RNN
+        self.rnn = nn.RNN(
             input_size=num_features,
             hidden_size=hidden_size,
             num_layers=num_layers,
@@ -386,25 +382,22 @@ class RNNBlock(nn.Module):
 
 
 class RNNEncoder(nn.Module):
-    """An RNN-based encoder composing a sequence of stacked RNN blocks.
-    Similar in structure to TDSConvEncoder but uses RNN layers instead of
-    temporal convolutions. Each block consists of a bidirectional RNN with
+    """A vanilla RNN-based encoder composing a sequence of stacked RNN blocks.
+    Similar in structure to TDSConvEncoder but uses vanilla RNN layers instead
+    of temporal convolutions. Each block consists of a bidirectional RNN with
     skip connections and layer normalization.
 
     Args:
         num_features (int): Input/output feature dimension for all blocks
         num_blocks (int): Number of RNN blocks to stack (default: 4)
         hidden_size (int): Hidden size for each RNN block (default: 256)
-        rnn_type (str): Type of RNN - 'lstm' or 'gru' (default: 'lstm')
         bidirectional (bool): Whether to use bidirectional RNN (default: True)
     """
-
     def __init__(
         self,
         num_features: int,
         num_blocks: int = 4,
         hidden_size: int = 256,
-        rnn_type: str = "lstm",
         bidirectional: bool = True,
     ) -> None:
         super().__init__()
@@ -416,7 +409,6 @@ class RNNEncoder(nn.Module):
                     num_features=num_features,
                     hidden_size=hidden_size,
                     num_layers=1,
-                    rnn_type=rnn_type,
                     bidirectional=bidirectional,
                 )
             )
