@@ -44,6 +44,52 @@ class SpectrogramNorm(nn.Module):
         return x.movedim(-1, 0)  # (T, N, bands=2, C=16, freq)
 
 
+class ChannelGate(nn.Module):
+    """Learnable per-electrode-channel gate for sparse channel selection via
+    L1 regularization.
+
+    Applies a learnable scalar weight to each electrode channel. During
+    training, L1 regularization on gate magnitudes drives unused channels
+    toward zero. After training, ``selected_channels()`` returns the indices
+    of channels whose gate magnitude exceeds ``threshold``.
+
+    The gate is inserted after ``SpectrogramNorm``, scaling inputs of shape
+    (T, N, bands, C, freq) along the electrode channel dimension C.
+
+    Args:
+        num_channels (int): Number of electrode channels per band.
+        threshold (float): Gate magnitude below which a channel is considered
+            deselected when calling ``selected_channels()``. (default: 0.01)
+    """
+
+    def __init__(self, num_channels: int, threshold: float = 0.01) -> None:
+        super().__init__()
+        self.threshold = threshold
+        self.gate = nn.Parameter(torch.ones(num_channels))
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        # inputs: (T, N, bands, C, freq), gate: (C,) -> broadcast (1, 1, 1, C, 1)
+        return inputs * self.gate[None, None, None, :, None]
+
+    def l1_loss(self) -> torch.Tensor:
+        """L1 norm of gate weights for use as a sparsity regularizer."""
+        return self.gate.abs().sum()
+
+    def prune_(self) -> None:
+        """Hard-threshold gate values in-place to create exact zeros."""
+        with torch.no_grad():
+            mask = self.gate.abs() <= self.threshold
+            self.gate[mask] = 0.0
+
+    def selected_channels(self) -> list[int]:
+        """Returns sorted indices of channels with |gate| > threshold."""
+        return sorted(
+            i
+            for i, w in enumerate(self.gate.abs().detach().cpu())
+            if w.item() > self.threshold
+        )
+
+
 class RotationInvariantMLP(nn.Module):
     """A `torch.nn.Module` that takes an input tensor of shape
     (T, N, electrode_channels, ...) corresponding to a single band, applies

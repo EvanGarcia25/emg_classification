@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, ClassVar
@@ -22,6 +23,7 @@ from emg2qwerty.charset import charset
 from emg2qwerty.data import LabelData, WindowedEMGDataset
 from emg2qwerty.metrics import CharacterErrorRates
 from emg2qwerty.modules import (
+    ChannelGate,
     CNNRNNEncoder,
     MultiBandRotationInvariantMLP,
     RNNEncoder,
@@ -30,6 +32,8 @@ from emg2qwerty.modules import (
     TemporalTransformerEncoder,
 )
 from emg2qwerty.transforms import Transform
+
+log = logging.getLogger(__name__)
 
 
 class WindowedEMGDataModule(pl.LightningDataModule):
@@ -153,6 +157,7 @@ class TDSConvCTCModule(pl.LightningModule):
         lr_scheduler: DictConfig,
         decoder: DictConfig,
         electrode_channels: int = 16,
+        l1_lambda: float = 1e-3,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -161,9 +166,9 @@ class TDSConvCTCModule(pl.LightningModule):
 
         # Model
         # inputs: (T, N, bands=2, C=electrode_channels, freq)
+        self.spec_norm = SpectrogramNorm(channels=self.NUM_BANDS * electrode_channels)
+        self.channel_gate = ChannelGate(num_channels=electrode_channels)
         self.model = nn.Sequential(
-            # (T, N, bands=2, C=electrode_channels, freq)
-            SpectrogramNorm(channels=self.NUM_BANDS * electrode_channels),
             # (T, N, bands=2, mlp_features[-1])
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
@@ -198,7 +203,9 @@ class TDSConvCTCModule(pl.LightningModule):
         )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        return self.model(inputs)
+        x = self.spec_norm(inputs)
+        x = self.channel_gate(x)
+        return self.model(x)
 
     def _step(
         self, phase: str, batch: dict[str, torch.Tensor], *args, **kwargs
@@ -224,6 +231,8 @@ class TDSConvCTCModule(pl.LightningModule):
             input_lengths=emission_lengths,  # (N,)
             target_lengths=target_lengths,  # (N,)
         )
+        if phase == "train":
+            loss = loss + self.hparams.l1_lambda * self.channel_gate.l1_loss()
 
         # Decode emissions
         predictions = self.decoder.decode_batch(
@@ -266,6 +275,14 @@ class TDSConvCTCModule(pl.LightningModule):
     def on_test_epoch_end(self) -> None:
         self._epoch_end("test")
 
+    def on_train_end(self) -> None:
+        self.channel_gate.prune_()
+        selected = self.channel_gate.selected_channels()
+        log.info(
+            f"Selected channels after training: {selected} "
+            f"({len(selected)} / {self.hparams.electrode_channels})"
+        )
+
     def configure_optimizers(self) -> dict[str, Any]:
         return utils.instantiate_optimizer_and_scheduler(
             self.parameters(),
@@ -288,6 +305,7 @@ class RNNCTCModule(pl.LightningModule):
         lr_scheduler: DictConfig,
         decoder: DictConfig,
         electrode_channels: int = 16,
+        l1_lambda: float = 1e-3,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -296,9 +314,9 @@ class RNNCTCModule(pl.LightningModule):
 
         # Model
         # inputs: (T, N, bands=2, C=electrode_channels, freq)
+        self.spec_norm = SpectrogramNorm(channels=self.NUM_BANDS * electrode_channels)
+        self.channel_gate = ChannelGate(num_channels=electrode_channels)
         self.model = nn.Sequential(
-            # (T, N, bands=2, C=electrode_channels, freq)
-            SpectrogramNorm(channels=self.NUM_BANDS * electrode_channels),
             # (T, N, bands=2, mlp_features[-1])
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
@@ -335,7 +353,9 @@ class RNNCTCModule(pl.LightningModule):
         )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        return self.model(inputs)
+        x = self.spec_norm(inputs)
+        x = self.channel_gate(x)
+        return self.model(x)
 
     def _step(
         self, phase: str, batch: dict[str, torch.Tensor], *args, **kwargs
@@ -359,6 +379,8 @@ class RNNCTCModule(pl.LightningModule):
             input_lengths=emission_lengths,  # (N,)
             target_lengths=target_lengths,  # (N,)
         )
+        if phase == "train":
+            loss = loss + self.hparams.l1_lambda * self.channel_gate.l1_loss()
 
         # Decode emissions
         predictions = self.decoder.decode_batch(
@@ -401,6 +423,14 @@ class RNNCTCModule(pl.LightningModule):
     def on_test_epoch_end(self) -> None:
         self._epoch_end("test")
 
+    def on_train_end(self) -> None:
+        self.channel_gate.prune_()
+        selected = self.channel_gate.selected_channels()
+        log.info(
+            f"Selected channels after training: {selected} "
+            f"({len(selected)} / {self.hparams.electrode_channels})"
+        )
+
     def configure_optimizers(self) -> dict[str, Any]:
         return utils.instantiate_optimizer_and_scheduler(
             self.parameters(),
@@ -432,6 +462,7 @@ class CNNRNNCTCModule(pl.LightningModule):
         lr_scheduler: DictConfig,
         decoder: DictConfig,
         electrode_channels: int = 16,
+        l1_lambda: float = 1e-3,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -441,6 +472,7 @@ class CNNRNNCTCModule(pl.LightningModule):
         self.spec_norm = SpectrogramNorm(
             channels=self.NUM_BANDS * electrode_channels
         )
+        self.channel_gate = ChannelGate(num_channels=electrode_channels)
         self.multiband_mlp = MultiBandRotationInvariantMLP(
             in_features=in_features,
             mlp_features=mlp_features,
@@ -474,6 +506,7 @@ class CNNRNNCTCModule(pl.LightningModule):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         x = self.spec_norm(inputs)
+        x = self.channel_gate(x)
         x = self.multiband_mlp(x)
         x = self.flatten(x)
         x = self.encoder(x)
@@ -499,6 +532,8 @@ class CNNRNNCTCModule(pl.LightningModule):
             input_lengths=emission_lengths,
             target_lengths=target_lengths,
         )
+        if phase == "train":
+            loss = loss + self.hparams.l1_lambda * self.channel_gate.l1_loss()
 
         predictions = self.decoder.decode_batch(
             emissions=emissions.detach().cpu().numpy(),
@@ -538,6 +573,14 @@ class CNNRNNCTCModule(pl.LightningModule):
     def on_test_epoch_end(self) -> None:
         self._epoch_end("test")
 
+    def on_train_end(self) -> None:
+        self.channel_gate.prune_()
+        selected = self.channel_gate.selected_channels()
+        log.info(
+            f"Selected channels after training: {selected} "
+            f"({len(selected)} / {self.hparams.electrode_channels})"
+        )
+
     def configure_optimizers(self) -> dict[str, Any]:
         return utils.instantiate_optimizer_and_scheduler(
             self.parameters(),
@@ -569,6 +612,7 @@ class TransformerCTCModule(pl.LightningModule):
         lr_scheduler: DictConfig,
         decoder: DictConfig,
         electrode_channels: int = 16,
+        l1_lambda: float = 1e-3,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -580,6 +624,7 @@ class TransformerCTCModule(pl.LightningModule):
         self.spec_norm = SpectrogramNorm(
             channels=self.NUM_BANDS * electrode_channels,
         )
+        self.channel_gate = ChannelGate(num_channels=electrode_channels)
         self.mlp = MultiBandRotationInvariantMLP(
             in_features=in_features,
             mlp_features=mlp_features,
@@ -614,6 +659,7 @@ class TransformerCTCModule(pl.LightningModule):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         x = self.spec_norm(inputs)
+        x = self.channel_gate(x)
         x = self.mlp(x)
         x = self.flatten(x)
         x = self.encoder(x)
@@ -640,6 +686,8 @@ class TransformerCTCModule(pl.LightningModule):
             input_lengths=emission_lengths, # (N,)
             target_lengths=target_lengths, # (N,)
         )
+        if phase == "train":
+            loss = loss + self.hparams.l1_lambda * self.channel_gate.l1_loss()
 
         # decode emissions
         predictions = self.decoder.decode_batch(
@@ -746,6 +794,14 @@ class TransformerCTCModule(pl.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         self._epoch_end("test")
+
+    def on_train_end(self) -> None:
+        self.channel_gate.prune_()
+        selected = self.channel_gate.selected_channels()
+        log.info(
+            f"Selected channels after training: {selected} "
+            f"({len(selected)} / {self.hparams.electrode_channels})"
+        )
 
     def configure_optimizers(self) -> dict[str, Any]:
         return utils.instantiate_optimizer_and_scheduler(

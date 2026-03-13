@@ -3,6 +3,7 @@ module:
   _target_: emg2qwerty.lightning.TransformerCTCModule
   in_features: ${module_in_features}
   electrode_channels: ${electrode_channels}
+  l1_lambda: ${channel_l1_lambda}
   mlp_features: [384]  # num_features = NUM_BANDS * mlp_features[-1] = 768
   nhead: 8
   num_transformer_layers: 6

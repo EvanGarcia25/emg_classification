@@ -3,6 +3,7 @@ module:
   _target_: emg2qwerty.lightning.RNNCTCModule
   in_features: ${module_in_features}
   electrode_channels: ${electrode_channels}
+  l1_lambda: ${channel_l1_lambda}
   mlp_features: [384]
   num_blocks: 4
   hidden_size: 256

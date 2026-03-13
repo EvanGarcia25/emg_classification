@@ -94,23 +94,46 @@ python -m emg2qwerty.train \
   trainer.accelerator=gpu trainer.devices=1
 ```
 
-Channel-count sweep for CER vs. number of electrode channels:
+L1 channel regularization with automatic channel selection:
 
 ```shell
 python -m emg2qwerty.train \
   user="single_user" \
   model=tds_conv_ctc \
-  trainer.accelerator=gpu trainer.devices=1 \
-  electrode_channels=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 \
-  --multirun
+  channel_l1_lambda=0.001 \
+  trainer.accelerator=gpu trainer.devices=1
 ```
 
-After the sweep finishes, summarize results and compute the minimum channels
-that achieve CER < 20:
+Channel isolation (prefix channels 0..C-1):
 
 ```shell
-python scripts/analyze_channel_sweep.py logs/<YYYY-MM-DD>/<HH-MM-SS> --target-cer 20
+python -m emg2qwerty.train \
+  user="single_user" \
+  model=tds_conv_ctc \
+  electrode_channels=8 \
+  trainer.accelerator=gpu trainer.devices=1
 ```
+
+Channel isolation (explicit channel indices):
+
+```shell
+python -m emg2qwerty.train \
+  user="single_user" \
+  model=tds_conv_ctc \
+  electrode_channels=3 \
+  channel_subset.channels=[0,5,9] \
+  trainer.accelerator=gpu trainer.devices=1
+```
+
+At the end of training, the model hard-thresholds channel gate weights and logs
+the selected channel indices with a message like:
+
+```text
+Selected channels after training: [0, 1, 2, 5, ...] (K / 16)
+```
+
+Tune `channel_l1_lambda` upward for stronger sparsity and fewer selected
+channels, or downward for weaker sparsity.
 
 If you are using a Slurm cluster, include "cluster=slurm" override in the argument list of above commands to pick up `config/cluster/slurm.yaml`. This overrides the Hydra Launcher to use [Submitit plugin](https://hydra.cc/docs/plugins/submitit_launcher). Refer to Hydra documentation for the list of available launcher plugins if you are not using a Slurm cluster.
 

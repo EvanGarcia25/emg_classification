@@ -12,6 +12,7 @@ seed: 1501
 electrode_channels: 16
 spectrogram_freq_bins: ${spec_bins:${logspec.n_fft}}
 module_in_features: ${mul:${spectrogram_freq_bins},${electrode_channels}}
+channel_l1_lambda: 0.001
 batch_size: 32
 num_workers: 4  # Number of workers for dataloading
 train: True  # Whether to train or only run validation and test
