@@ -43,6 +43,66 @@ class ToTensor:
 
 
 @dataclass
+class SelectElectrodeChannels:
+    """Selects a subset of electrode channels.
+
+    This transform expects an input shaped like ``(..., C)`` where ``C`` is
+    the electrode-channel dimension and returns ``(..., C')`` where ``C'`` is
+    either ``num_channels`` (prefix selection) or ``len(channels)`` (explicit
+    index selection).
+
+    Args:
+        num_channels (int): Number of channels to keep from the beginning of
+            the channel axis when ``channels`` is not provided.
+            (default: ``16``)
+        channels (list): Optional explicit channel indices to keep.
+            If provided, this takes precedence over ``num_channels``.
+            (default: ``None``)
+        channel_dim (int): Electrode channel dimension. (default: ``-1``)
+    """
+
+    num_channels: int = 16
+    channels: Sequence[int] | None = None
+    channel_dim: int = -1
+
+    def __post_init__(self) -> None:
+        if self.channels is not None and len(self.channels) == 0:
+            raise ValueError("channels must be non-empty when provided")
+        if self.num_channels <= 0:
+            raise ValueError("num_channels must be > 0")
+
+    def __call__(self, tensor: torch.Tensor) -> torch.Tensor:
+        num_total_channels = tensor.shape[self.channel_dim]
+
+        if self.channels is not None:
+            channel_indices = [int(channel) for channel in self.channels]
+        else:
+            if self.num_channels == num_total_channels:
+                return tensor
+            channel_indices = list(range(self.num_channels))
+
+        if len(channel_indices) > num_total_channels:
+            raise ValueError(
+                "Requested more channels than available "
+                f"({len(channel_indices)} > {num_total_channels})"
+            )
+        if any(
+            channel < 0 or channel >= num_total_channels
+            for channel in channel_indices
+        ):
+            raise ValueError(
+                f"channels must be in [0, {num_total_channels - 1}]"
+            )
+
+        index = torch.tensor(
+            channel_indices,
+            dtype=torch.long,
+            device=tensor.device,
+        )
+        return torch.index_select(tensor, dim=self.channel_dim, index=index)
+
+
+@dataclass
 class Lambda:
     """Applies a custom lambda function as a transform.
 

@@ -94,6 +94,24 @@ python -m emg2qwerty.train \
   trainer.accelerator=gpu trainer.devices=1
 ```
 
+Channel-count sweep for CER vs. number of electrode channels:
+
+```shell
+python -m emg2qwerty.train \
+  user="single_user" \
+  model=tds_conv_ctc \
+  trainer.accelerator=gpu trainer.devices=1 \
+  electrode_channels=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 \
+  --multirun
+```
+
+After the sweep finishes, summarize results and compute the minimum channels
+that achieve CER < 20:
+
+```shell
+python scripts/analyze_channel_sweep.py logs/<YYYY-MM-DD>/<HH-MM-SS> --target-cer 20
+```
+
 If you are using a Slurm cluster, include "cluster=slurm" override in the argument list of above commands to pick up `config/cluster/slurm.yaml`. This overrides the Hydra Launcher to use [Submitit plugin](https://hydra.cc/docs/plugins/submitit_launcher). Refer to Hydra documentation for the list of available launcher plugins if you are not using a Slurm cluster.
 
 ## Testing

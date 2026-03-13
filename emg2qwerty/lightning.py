@@ -144,7 +144,6 @@ class WindowedEMGDataModule(pl.LightningDataModule):
 
 class TDSConvCTCModule(pl.LightningModule):
     NUM_BANDS: ClassVar[int] = 2
-    ELECTRODE_CHANNELS: ClassVar[int] = 16
 
     def __init__(
         self,
@@ -155,6 +154,7 @@ class TDSConvCTCModule(pl.LightningModule):
         optimizer: DictConfig,
         lr_scheduler: DictConfig,
         decoder: DictConfig,
+        electrode_channels: int = 16,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -162,10 +162,10 @@ class TDSConvCTCModule(pl.LightningModule):
         num_features = self.NUM_BANDS * mlp_features[-1]
 
         # Model
-        # inputs: (T, N, bands=2, electrode_channels=16, freq)
+        # inputs: (T, N, bands=2, C=electrode_channels, freq)
         self.model = nn.Sequential(
-            # (T, N, bands=2, C=16, freq)
-            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
+            # (T, N, bands=2, C=electrode_channels, freq)
+            SpectrogramNorm(channels=self.NUM_BANDS * electrode_channels),
             # (T, N, bands=2, mlp_features[-1])
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
@@ -278,7 +278,6 @@ class TDSConvCTCModule(pl.LightningModule):
 
 class RNNCTCModule(pl.LightningModule):
     NUM_BANDS: ClassVar[int] = 2
-    ELECTRODE_CHANNELS: ClassVar[int] = 16
 
     def __init__(
         self,
@@ -290,6 +289,7 @@ class RNNCTCModule(pl.LightningModule):
         optimizer: DictConfig,
         lr_scheduler: DictConfig,
         decoder: DictConfig,
+        electrode_channels: int = 16,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -297,10 +297,10 @@ class RNNCTCModule(pl.LightningModule):
         num_features = self.NUM_BANDS * mlp_features[-1]
 
         # Model
-        # inputs: (T, N, bands=2, electrode_channels=16, freq)
+        # inputs: (T, N, bands=2, C=electrode_channels, freq)
         self.model = nn.Sequential(
-            # (T, N, bands=2, C=16, freq)
-            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
+            # (T, N, bands=2, C=electrode_channels, freq)
+            SpectrogramNorm(channels=self.NUM_BANDS * electrode_channels),
             # (T, N, bands=2, mlp_features[-1])
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
@@ -417,7 +417,6 @@ class CNNRNNCTCModule(pl.LightningModule):
     sequence dependencies."""
 
     NUM_BANDS: ClassVar[int] = 2
-    ELECTRODE_CHANNELS: ClassVar[int] = 16
 
     def __init__(
         self,
@@ -434,6 +433,7 @@ class CNNRNNCTCModule(pl.LightningModule):
         optimizer: DictConfig,
         lr_scheduler: DictConfig,
         decoder: DictConfig,
+        electrode_channels: int = 16,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -441,7 +441,7 @@ class CNNRNNCTCModule(pl.LightningModule):
         num_features = self.NUM_BANDS * mlp_features[-1]
 
         self.spec_norm = SpectrogramNorm(
-            channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS
+            channels=self.NUM_BANDS * electrode_channels
         )
         self.multiband_mlp = MultiBandRotationInvariantMLP(
             in_features=in_features,
@@ -554,7 +554,6 @@ class TransformerCTCModule(pl.LightningModule):
     replacing the TDS convolutional or RNN encoder."""
 
     NUM_BANDS: ClassVar[int] = 2
-    ELECTRODE_CHANNELS: ClassVar[int] = 16
     # maximum chunk size for test-time inference. Full sessions can be
     # 140k+ timesteps, causing O(t^2) attention collapse. Chunking keeps
     # each window within the trained context length.
@@ -571,6 +570,7 @@ class TransformerCTCModule(pl.LightningModule):
         optimizer: DictConfig,
         lr_scheduler: DictConfig,
         decoder: DictConfig,
+        electrode_channels: int = 16,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -578,9 +578,9 @@ class TransformerCTCModule(pl.LightningModule):
         num_features = self.NUM_BANDS * mlp_features[-1]
 
         # model components
-        # inputs: (T, N, bands=2, electrode_channels=16, freq)
+        # inputs: (T, N, bands=2, C=electrode_channels, freq)
         self.spec_norm = SpectrogramNorm(
-            channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS,
+            channels=self.NUM_BANDS * electrode_channels,
         )
         self.mlp = MultiBandRotationInvariantMLP(
             in_features=in_features,
@@ -746,7 +746,6 @@ class ViTransformerCTCModule(pl.LightningModule):
     (across timesteps)."""
 
     NUM_BANDS: ClassVar[int] = 2
-    ELECTRODE_CHANNELS: ClassVar[int] = 16
     TEST_CHUNK_SIZE: ClassVar[int] = 8000
 
     def __init__(
@@ -764,19 +763,26 @@ class ViTransformerCTCModule(pl.LightningModule):
         optimizer: DictConfig,
         lr_scheduler: DictConfig,
         decoder: DictConfig,
+        electrode_channels: int = 16,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
 
-        freq_bins = in_features // self.ELECTRODE_CHANNELS
+        if in_features % electrode_channels != 0:
+            raise ValueError(
+                "in_features must be divisible by electrode_channels "
+                f"(got in_features={in_features}, "
+                f"electrode_channels={electrode_channels})"
+            )
+        freq_bins = in_features // electrode_channels
 
         # model components
-        # inputs: (T, N, bands=2, electrode_channels=16, freq)
+        # inputs: (T, N, bands=2, C=electrode_channels, freq)
         self.spec_norm = SpectrogramNorm(
-            channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS,
+            channels=self.NUM_BANDS * electrode_channels,
         )
         self.patch_embed = EMGPatchEmbedding(
-            electrode_channels=self.ELECTRODE_CHANNELS,
+            electrode_channels=electrode_channels,
             freq_bins=freq_bins,
             patch_size=patch_size,
             d_model=d_model,
@@ -818,7 +824,7 @@ class ViTransformerCTCModule(pl.LightningModule):
         )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        # (T, N, bands=2, C=16, freq)
+        # (T, N, bands=2, C, freq)
         x = self.spec_norm(inputs)
         # (T, N, total_patches, d_model)
         x = self.patch_embed(x)

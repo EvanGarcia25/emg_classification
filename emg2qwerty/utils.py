@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from collections.abc import Iterator
+import math
 from pathlib import Path
 from typing import Any
 
@@ -42,3 +43,13 @@ def cpus_per_task(gpus_per_node: int, tasks_per_node: int, num_workers: int) -> 
         return num_workers + 1
     else:
         return (num_workers + 1) * gpus_per_task
+
+
+def spectrogram_freq_bins(n_fft: int) -> int:
+    """Number of frequency bins returned by STFT with real-valued inputs."""
+    return int(n_fft) // 2 + 1
+
+
+def mul(*values: int) -> int:
+    """Integer multiplication helper for OmegaConf interpolation resolvers."""
+    return math.prod(int(value) for value in values)

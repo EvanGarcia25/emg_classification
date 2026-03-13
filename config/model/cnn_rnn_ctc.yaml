@@ -1,7 +1,8 @@
 # @package _global_
 module:
   _target_: emg2qwerty.lightning.CNNRNNCTCModule
-  in_features: 528  # freq * channels = (n_fft // 2 + 1) * 16
+  in_features: ${module_in_features}
+  electrode_channels: ${electrode_channels}
   mlp_features: [384]
   cnn_channels: [64, 128, 128]
   cnn_kernel_size: 5
