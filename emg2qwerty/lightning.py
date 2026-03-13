@@ -594,10 +594,8 @@ class TransformerCTCModule(pl.LightningModule):
     replacing the TDS convolutional or RNN encoder."""
 
     NUM_BANDS: ClassVar[int] = 2
-    # maximum chunk size for test-time inference. Full sessions can be
-    # 140k+ timesteps, causing O(t^2) attention collapse. Chunking keeps
-    # each window within the trained context length.
-    TEST_CHUNK_SIZE: ClassVar[int] = 8000
+
+    TEST_CHUNK_SIZE: ClassVar[int] = 8000  # ≈ 8000 raw EMG 
 
     def __init__(
         self,
@@ -717,26 +715,23 @@ class TransformerCTCModule(pl.LightningModule):
         if T <= self.TEST_CHUNK_SIZE:
             return self.forward(inputs)
         
-        # Use same padding as training for context around each chunk
-        pre_pad, post_pad = 1800, 200
-        pad_size = pre_pad + post_pad
+        pre_pad, post_pad = 1800, 200 # updated
         
         outputs = []
         for start in range(0, T, self.TEST_CHUNK_SIZE):
-            # Extract chunk with padding context
+            # extract chunk with padding context
             pad_start = max(0, start - pre_pad)
             pad_end = min(T, start + self.TEST_CHUNK_SIZE + post_pad)
             chunk_padded = inputs[pad_start:pad_end]
             
-            # Run forward
+            # run forward
             chunk_output = self.forward(chunk_padded)
             
-            # Extract only the middle part (without padding regions) from output
+            # extract only the middle part (without padding regions) from output
             output_start = start - pad_start  # frames from pre-padding
-            output_end = output_start + self.TEST_CHUNK_SIZE
+            # last chunk may be shorter than TEST_CHUNK_SIZE
+            output_end = output_start + min(self.TEST_CHUNK_SIZE, T - start)
             
-            # Clamp to valid output range
-            output_start = max(0, output_start)
             output_end = min(chunk_output.shape[0], output_end)
             
             outputs.append(chunk_output[output_start:output_end])
